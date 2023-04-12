@@ -17,6 +17,7 @@ from diffusers import (
     StableDiffusionControlNetPipeline,
     StableDiffusionImg2ImgPipeline,
     StableDiffusionInpaintPipelineLegacy,
+    StableDiffusionLatentUpscalePipeline,
     StableDiffusionPipeline,
     UniPCMultistepScheduler,
 )
@@ -41,6 +42,12 @@ class Predictor(BasePredictor):
             torch_dtype=torch.float16,
             cache_dir=settings.MODEL_CACHE,
             local_files_only=True,
+        ).to("cuda")
+
+        
+        self.upscaler = StableDiffusionLatentUpscalePipeline.from_pretrained(
+            "stabilityai/sd-x2-latent-upscaler",
+            torch_dtype=torch.float16
         ).to("cuda")
 
         self.safety_checker = self.txt2img_pipe.safety_checker
@@ -286,17 +293,34 @@ class Predictor(BasePredictor):
         for idx in range(num_outputs):
             this_seed = seed + idx
             generator = torch.Generator("cuda").manual_seed(this_seed)
-            output = pipe(
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
-                guidance_scale=guidance_scale,
+            # output = pipe(
+            #     prompt_embeds=prompt_embeds,
+            #     negative_prompt_embeds=negative_prompt_embeds,
+            #     guidance_scale=guidance_scale,
+            #     generator=generator,
+            #     num_inference_steps=num_inference_steps,
+            #     output_type="latent",
+            #     **extra_kwargs,
+            # )
+
+            low_res_latents = pipe(
+                prompt,
                 generator=generator,
-                num_inference_steps=num_inference_steps,
+                output_type="latent",
                 **extra_kwargs,
+            ).images
+
+            output = self.upscaler(
+                prompt=prompt,
+                image=low_res_latents,
+                num_inference_steps=20,
+                guidance_scale=0,
+                generator=generator,
+                output_type="pil"
             )
 
-            if output.nsfw_content_detected and output.nsfw_content_detected[0]:
-                continue
+            # if output.nsfw_content_detected and output.nsfw_content_detected[0]:
+            #     continue
 
             output_path = f"/tmp/seed-{this_seed}.png"
             output.images[0].save(output_path)
